@@ -39,7 +39,7 @@ class ContaminationScore:
 def evaluate_sample(
     sample: BenchmarkSample,
     sample_id: int,
-    model_name: str = "llama-3.1-8b-instant",
+    model_name: str = "llama-3.3-70b-versatile",
     verbose: bool = False
 ) -> SampleResult:
     """
@@ -58,10 +58,12 @@ def evaluate_sample(
     correctness = {}
 
     for level_name, variant in variants.items():
-        # query model with retry on rate limit
         raw_response = _query_with_retry(variant, model_name)
         extracted = extract_answer(raw_response, variant.source)
         correct = extracted == variant.answer
+        if not correct and level_name == "original": #debug why model 
+            print(f"    DEBUG raw response for {level_name}:")
+            print(f"    {raw_response[:300]}")
 
         model_answers[level_name] = extracted
         expected_answers[level_name] = variant.answer
@@ -170,7 +172,7 @@ def print_contamination_report(score: ContaminationScore):
 # ============================================================
 
 if __name__ == "__main__":
-    MODEL = "llama-3.1-8b-instant"
+    MODEL = "llama-3.3-70b-versatile"
     N_SAMPLES = 5   # keep small for testing — increase for real runs
 
     print(f"Running contamination evaluation...")

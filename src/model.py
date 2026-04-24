@@ -14,32 +14,45 @@ def query_model(sample: BenchmarkSample, model: str = "llama-3.1-8b-instant") ->
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        max_tokens=512
+        max_tokens=1024   # was 512 — small models need room to reason
     )
     return response.choices[0].message.content.strip()
 
 def extract_answer(response: str, source: str) -> str:
-    """
-    Pulls the final answer out of the model's response.
-    Handles dollar signs, commas, and the 'Answer:' prefix.
-    """
-    # look for explicit "Answer: ..." line first
-    match = re.search(r'Answer:\s*\$?([\d,]+(?:\.\d+)?)', response)
+    if not response or not response.strip():
+        return ""
+
+    # Strategy 1: explicit "Answer:" line — most reliable
+    match = re.search(r'Answer:\s*\$?([\d,]+(?:\.\d+)?)', response, re.IGNORECASE)
     if match:
         return match.group(1).replace(",", "")
-    
-    # for MMLU — just look for a single letter A/B/C/D
+
+    # Strategy 2: MMLU letter at end of response
     if source == "mmlu":
+        tail = response[-100:]
+        match = re.search(r'\b([A-D])\b(?!.*\b[A-D]\b)', tail)
+        if match:
+            return match.group(1)
         match = re.search(r'\b([A-D])\b', response)
         if match:
             return match.group(1)
-    
-    # fallback — grab the last number in the response
+
+    # Strategy 3: common answer-indicator patterns
+    patterns = [
+        r'(?:the answer is|answer is|equals|total is|result is|makes)\s*\$?([\d,]+(?:\.\d+)?)',
+        r'=\s*\$?([\d,]+(?:\.\d+)?)\s*(?:\.|$|\n)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, response, re.IGNORECASE)
+        if match:
+            return match.group(1).replace(",", "")
+
+    # Strategy 4: last number in response (math answers usually end with the number)
     numbers = re.findall(r'\$?([\d,]+(?:\.\d+)?)', response)
     if numbers:
         return numbers[-1].replace(",", "")
-    
-    return response.strip()
+
+    return ""
 
 def build_prompt(sample: BenchmarkSample) -> str:
     if sample.source == "humaneval":
@@ -50,12 +63,17 @@ def build_prompt(sample: BenchmarkSample) -> str:
     elif sample.source == "mmlu":
         return (
             f"Answer the following multiple choice question. "
-            f"Reply with only the letter (A, B, C, or D).\n\n{sample.question}"
+            f"Think step by step, then end with 'Answer: X' where X is A, B, C, or D.\n\n"
+            f"{sample.question}"
         )
     else:
         return (
             f"Solve the following problem step by step. "
-            f"At the end, write your final answer on a new line starting with 'Answer:'\n\n"
+            f"Show your reasoning clearly. "
+            f"IMPORTANT: Your response MUST end with exactly this line:\n"
+            f"Answer: N\n"
+            f"where N is a single integer (no units, no dollar signs, no commas, no decimals). "
+            f"Do not continue reasoning after the Answer line.\n\n"
             f"{sample.question}"
         )
 

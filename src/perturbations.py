@@ -15,13 +15,25 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # ============================================================
 
 def _llm_call(prompt: str, temperature: float = 0.7, max_tokens: int = 512) -> str:
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens
-    )
-    return response.choices[0].message.content.strip()
+    """Single point of contact with the Groq API, with rate limit retry."""
+    import time
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                wait_time = 60
+                print(f"  [generator] rate limit hit, waiting {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                raise
+    return ""
 
 
 # ============================================================
@@ -121,11 +133,11 @@ def is_valid_perturbation(
 # ============================================================
 
 def level_1_surface(sample: BenchmarkSample) -> BenchmarkSample:
-    """L1 — Surface paraphrase. Same numbers, same answer."""
     prompt = (
         f"Rewrite this problem with completely different vocabulary and sentence structure. "
-        f"Keep every number identical. The answer must remain {sample.answer} "
-        f"but do not mention {sample.answer} anywhere.\n"
+        f"Keep every number identical. "
+        f"CRITICAL: Do NOT write the number {sample.answer} anywhere in your rewrite — "
+        f"neither as a value nor in any example. Use different numbers for any example you give.\n"
         f"No calculations or equals signs. End with a question mark.\n\n"
         f"Problem: {sample.question}\n\n"
         f"Return ONLY the rewritten question."
@@ -176,16 +188,16 @@ def level_2_number_swap(sample: BenchmarkSample) -> BenchmarkSample:
 
 
 def level_3_structural_rewrite(sample: BenchmarkSample) -> BenchmarkSample:
-    """L3 — Same numbers, same answer, different reasoning path."""
     original_numbers = _extract_numbers(sample.question)
     prompt = (
         f"Rewrite this problem so the answer stays {sample.answer} but the reasoning "
         f"structure is different. Techniques: invert the question, reorder information, "
         f"change perspective.\n\n"
-        f"CRITICAL: The rewritten question must contain ALL of these numbers: {original_numbers}. "
-        f"Every number from the original must appear somewhere in the rewrite. "
-        f"You may rephrase but cannot omit any number.\n\n"
-        f"Do not mention {sample.answer}. No calculations. End with a question mark.\n\n"
+        f"CRITICAL RULES:\n"
+        f"- The rewritten question must contain ALL these numbers: {original_numbers}\n"
+        f"- Do NOT write the number {sample.answer} anywhere in your rewrite\n"
+        f"- No calculations, no equals signs\n"
+        f"- End with a question mark\n\n"
         f"Problem: {sample.question}\n\n"
         f"Return ONLY the rewritten question."
     )
@@ -198,15 +210,17 @@ def level_3_structural_rewrite(sample: BenchmarkSample) -> BenchmarkSample:
 
 
 def level_4_adversarial(sample: BenchmarkSample) -> BenchmarkSample:
-    """L4 — Unfamiliar domain + one distractor. Same numbers, same answer."""
     prompt = (
         f"Rewrite this problem with two changes:\n"
         f"1. Move it to an unfamiliar domain (deep sea biology, medieval blacksmithing, "
         f"asteroid mining, ancient astronomy).\n"
         f"2. Add ONE irrelevant numerical distractor in its own sentence.\n\n"
-        f"CRITICAL: Keep the exact same math operations (same additions, subtractions, "
+        f"CRITICAL RULES:\n"
+        f"- Keep the exact same math operations (same additions, subtractions, "
         f"multiplications). The answer must remain {sample.answer}.\n"
-        f"Do not mention {sample.answer}. No calculations. End with a question mark.\n\n"
+        f"- Do NOT write the number {sample.answer} anywhere\n"
+        f"- The distractor number must NOT equal {sample.answer}\n"
+        f"- No calculations. End with a question mark.\n\n"
         f"Problem: {sample.question}\n\n"
         f"Return ONLY the rewritten question."
     )
